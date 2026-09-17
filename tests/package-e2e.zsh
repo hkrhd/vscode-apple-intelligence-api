@@ -10,7 +10,8 @@ binary="$temporary/extension/bin/apple-intelligence-api"
 [[ -x "$binary" ]]
 file "$binary" | grep -q 'Mach-O 64-bit executable arm64'
 grep -q 'TargetPlatform="darwin-arm64"' "$temporary/extension.vsixmanifest"
-grep -q 'オンデバイスモデルは性能が低く' "$temporary/extension/README.md"
+grep -q 'performs poorly' "$temporary/extension/README.md"
+grep -q 'オンデバイスモデルは性能が低く' "$temporary/extension/README_JA.md"
 [[ -f "$temporary/extension/package.nls.json" ]]
 [[ -f "$temporary/extension/package.nls.ja.json" ]]
 [[ -f "$temporary/extension/l10n/bundle.l10n.json" ]]
