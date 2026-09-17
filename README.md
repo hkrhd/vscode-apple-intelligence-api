@@ -1,42 +1,44 @@
+[日本語](README_JA.md)
+
 # Apple Intelligence API for VS Code
 
 > [!WARNING]
-> **26/09時点でappleのオンデバイスモデルは性能が低く，実用性は低い．**
+> **As of Sep 2026, Apple's on-device model performs poorly and has limited practical use.**
 
-Apple IntelligenceのFoundation Modelsを、localhost限定のOpenAI互換APIとして起動する非公式VSCode拡張です。
-プロンプト、入力、生成結果、利用統計を外部へ送信しません。
+An unofficial VS Code extension that exposes Apple Intelligence Foundation Models as a localhost-only OpenAI-compatible API.
+Prompts, inputs, generations, and usage statistics are never sent externally.
 
-## 必要環境
+## Requirements
 
-- Apple Silicon搭載Mac
-- macOS 26以降
-- Apple Intelligenceが有効で、モデルのダウンロードが完了していること
-- VS Code 1.110以降
+- Mac with Apple Silicon
+- macOS 26 or later
+- Apple Intelligence enabled with the model download completed
+- VS Code 1.110 or later
 
-## できること
+## What it can do
 
-| モデル         | API                         | 用途                         |
-| -------------- | --------------------------- | ---------------------------- |
-| `apple-inline` | `POST /v1/completions`      | FIM形式のinline補完          |
-| `apple-nes`    | `POST /v1/chat/completions` | Copilot Completions形式のNES |
+| Model          | API                         | Purpose                           |
+| -------------- | --------------------------- | --------------------------------- |
+| `apple-inline` | `POST /v1/completions`      | FIM-style inline completion       |
+| `apple-nes`    | `POST /v1/chat/completions` | Copilot Completions-style NES     |
 
-`GET /v1/models`、`GET /health`、JSON応答、SSEに対応します。サーバーは`127.0.0.1:8765`だけで待ち受けます。
+Supports `GET /v1/models`, `GET /health`, JSON responses, and SSE. The server listens only on `127.0.0.1:8765`.
 
-`apple-nes`のChat Completions形式はNESのタグ付き編集プロトコル用であり、汎用チャットモデルではありません。
+The `apple-nes` Chat Completions format is for the NES tagged-edit protocol, not a general-purpose chat model.
 
-## 重要: 公式GitHub Copilotの制限
+## Important: official GitHub Copilot limitation
 
-**2026年9月現在、VS CodeのBYOK／Custom Endpointで指定できるローカルモデルはChatとutility task向けです。公式GitHub Copilotのinline補完とNESのバックエンドを、このサーバーへ差し替えることはできません。** `GitHub Copilot: Change Completions Model`に表示されるのもGitHub側が提供するモデルです。
+**As of September 2026, local models selectable via VS Code BYOK / Custom Endpoint are for Chat and utility tasks. The official GitHub Copilot inline completion and NES backends cannot be replaced with this server.** The models shown in `GitHub Copilot: Change Completions Model` are provided by GitHub.
 
-参考: [VS Code — AI language models](https://code.visualstudio.com/docs/agent-customization/language-models)
+See: [VS Code — AI language models](https://code.visualstudio.com/docs/agent-customization/language-models)
 
-このサーバーを使うには、endpointとモデル名を任意指定できる補完拡張が必要です。現時点で補完とNESの両方にデファクトスタンダードはありません。
+To use this server, you need a completion extension that lets you specify an arbitrary endpoint and model name. There is currently no de facto standard covering both completion and NES.
 
-## Copilot Completionsで使う
+## Using with Copilot Completions
 
-[Copilot Completions](https://marketplace.visualstudio.com/items?itemName=young-triangle.copilot-completions) v1.2.4で動作確認しています。
+Verified with [Copilot Completions](https://marketplace.visualstudio.com/items?itemName=young-triangle.copilot-completions) v1.2.4.
 
-`settings.json`へ次を追加します。
+Add the following to `settings.json`:
 
 ```json
 {
@@ -51,22 +53,22 @@ Apple IntelligenceのFoundation Modelsを、localhost限定のOpenAI互換APIと
 }
 ```
 
-Copilot CompletionsのステータスメニューでGHOSTとNESを有効、NCPを無効にします。他のinline/NESプロバイダーと同時に有効にすると提案が競合します。
+In the Copilot Completions status menu, enable GHOST and NES and disable NCP. Enabling other inline/NES providers at the same time causes competing suggestions.
 
-## プロンプト設定
+## Prompt settings
 
-Command Paletteの`Apple Intelligence API: プロンプト設定を開く`から、モデルへ渡す全プロンプトをユーザー設定として変更できます。設定は全VS Codeウインドウで共通です。保存後、次のリクエストから再起動なしで反映されます。
+From the Command Palette, `Apple Intelligence API: Open Prompt Settings` lets you change all prompts passed to the model as user settings. Settings are shared across all VS Code windows. After saving, changes apply from the next request without a restart.
 
-- `appleIntelligenceApi.inline.instructions` / `appleIntelligenceApi.nes.instructions`: 通常の指示プロンプト
-- `appleIntelligenceApi.inline.languageInstructions` / `appleIntelligenceApi.nes.languageInstructions`: 言語ID別の指示プロンプト
-- `appleIntelligenceApi.inline.promptTemplate` / `appleIntelligenceApi.nes.promptTemplate`: 入力テンプレート
-- `appleIntelligenceApi.inline.languagePromptTemplates` / `appleIntelligenceApi.nes.languagePromptTemplates`: 言語ID別の入力テンプレート
-- `appleIntelligenceApi.nes.renameHintTemplate` / `appleIntelligenceApi.nes.languageRenameHintTemplates`: rename指示テンプレート
+- `appleIntelligenceApi.inline.instructions` / `appleIntelligenceApi.nes.instructions`: default instruction prompts
+- `appleIntelligenceApi.inline.languageInstructions` / `appleIntelligenceApi.nes.languageInstructions`: per-language-ID instruction prompts
+- `appleIntelligenceApi.inline.promptTemplate` / `appleIntelligenceApi.nes.promptTemplate`: input templates
+- `appleIntelligenceApi.inline.languagePromptTemplates` / `appleIntelligenceApi.nes.languagePromptTemplates`: per-language-ID input templates
+- `appleIntelligenceApi.nes.renameHintTemplate` / `appleIntelligenceApi.nes.languageRenameHintTemplates`: rename hint templates
 
-言語別設定がある場合は通常設定を完全に置き換えます。inlineテンプレートには`{before}`と`{after}`、NESテンプレートには`{recentEdits}`、`{beforeTarget}`、`{afterTarget}`、`{target}`、rename指示には`{old}`と`{new}`を各1回指定してください。不正な設定は通知とステータスバーに表示され、補完APIは`invalid_prompt_configuration`を返します。
+When a per-language setting exists, it fully replaces the default setting. Inline templates must contain `{before}` and `{after}` once each, NES templates must contain `{recentEdits}`, `{beforeTarget}`, `{afterTarget}`, and `{target}` once each, and rename hints must contain `{old}` and `{new}` once each. Invalid settings are shown in a notification and the status bar, and completion APIs return `invalid_prompt_configuration`.
 
-旧バージョンで編集したglobal storage内の`prompts/*.md`は参照されません。プロンプト本文は引き続き外部へ送信されません。
+`prompts/*.md` in global storage edited with older versions is no longer referenced. Prompt bodies are still never sent externally.
 
-## ライセンス
+## License
 
-MIT。依存パッケージの通知は[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)と配布VSIX内の`dist/licenses`を参照してください。
+MIT. For dependency notices, see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and `dist/licenses` inside the distributed VSIX.
