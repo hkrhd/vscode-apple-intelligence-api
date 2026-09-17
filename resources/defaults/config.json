@@ -1,0 +1,25 @@
+{
+  "port": 8765,
+  "context_tokens": 4096,
+  "safety_tokens": 384,
+  "timeout_seconds": 30,
+  "language_prompt_files": {"markdown": "prompts/markdown.md"},
+  "models": {
+    "apple-inline": {
+      "task": "inline",
+      "adapter": "fim",
+      "prompt_file": "prompts/apple-inline.md",
+      "language_prompt_files": {"markdown": "prompts/apple-inline-markdown.md"},
+      "max_output_tokens": 256,
+      "temperature": 0
+    },
+    "apple-nes": {
+      "task": "nes",
+      "adapter": "copilot-completions",
+      "prompt_file": "prompts/apple-nes.md",
+      "language_prompt_files": {"markdown": "prompts/apple-nes-markdown.md"},
+      "max_output_tokens": 768,
+      "temperature": 0
+    }
+  }
+}

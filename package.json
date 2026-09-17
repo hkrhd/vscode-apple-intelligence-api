@@ -1,0 +1,93 @@
+{
+  "name": "vscode-apple-intelligence-api",
+  "displayName": "Apple Intelligence API",
+  "description": "Run Apple Intelligence locally as an OpenAI-compatible completion and NES API for VS Code.",
+  "version": "0.1.0",
+  "publisher": "hkrhd",
+  "license": "MIT",
+  "private": false,
+  "engines": {
+    "vscode": "^1.110.0"
+  },
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "categories": ["Machine Learning", "Other"],
+  "keywords": ["Apple Intelligence", "completion", "NES", "OpenAI compatible", "local"],
+  "main": "./dist/extension.cjs",
+  "icon": "media/icon.png",
+  "activationEvents": ["onStartupFinished"],
+  "extensionKind": ["ui"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hkrhd/vscode-apple-intelligence-api.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hkrhd/vscode-apple-intelligence-api/issues"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "build:extension": "esbuild src/extension.ts --bundle --platform=node --format=cjs --external:vscode --outfile=dist/extension.cjs",
+    "build:native": "zsh scripts/build-native.zsh",
+    "build": "bun run check && bun run build:extension && bun run build:native",
+    "package": "zsh scripts/package.zsh",
+    "test:server": "bun tests/server-e2e.ts --hot-reload",
+    "test:package": "zsh tests/package-e2e.zsh"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "appleIntelligenceApi.toggle",
+        "title": "Apple Intelligence API: 有効／無効を切り替え"
+      },
+      {
+        "command": "appleIntelligenceApi.start",
+        "title": "Apple Intelligence API: サーバーを開始"
+      },
+      {
+        "command": "appleIntelligenceApi.stop",
+        "title": "Apple Intelligence API: サーバーを停止"
+      },
+      {
+        "command": "appleIntelligenceApi.restart",
+        "title": "Apple Intelligence API: サーバーを再起動"
+      },
+      {
+        "command": "appleIntelligenceApi.openConfig",
+        "title": "Apple Intelligence API: 設定を開く"
+      },
+      {
+        "command": "appleIntelligenceApi.openPrompts",
+        "title": "Apple Intelligence API: プロンプトを表示"
+      },
+      {
+        "command": "appleIntelligenceApi.showLogs",
+        "title": "Apple Intelligence API: ログを表示"
+      },
+      {
+        "command": "appleIntelligenceApi.showStatus",
+        "title": "Apple Intelligence API: 状態を表示"
+      },
+      {
+        "command": "appleIntelligenceApi.resetDefaults",
+        "title": "Apple Intelligence API: 設定とプロンプトを初期化"
+      }
+    ],
+    "configuration": {
+      "title": "Apple Intelligence API",
+      "properties": {
+        "appleIntelligenceApi.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "ローカルAPIサーバーを有効にします。無効時はプロセスを終了してメモリを解放します。"
+        }
+      }
+    }
+  },
+  "devDependencies": {
+    "@types/node": "24.5.2",
+    "@types/vscode": "1.110.0",
+    "@vscode/vsce": "3.6.0",
+    "esbuild": "0.25.10",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,17 @@
+.artifacts/**
+.build/**
+.bun-version
+.github/**
+.gitignore
+.jj/**
+.swiftpm/**
+Sources/**
+scripts/**
+src/**
+tests/**
+node_modules/**
+Package.swift
+Package.resolved
+tsconfig.json
+bun.lock
+AGENTS.md

@@ -1,0 +1,8 @@
+/.artifacts/
+/.build/
+/.swiftpm/
+/bin/
+/dist/
+/node_modules/
+*.vsix
+.DS_Store
