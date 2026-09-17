@@ -71,7 +71,7 @@ class ServerController implements vscode.Disposable {
     this.lockPath = path.join(context.globalStorageUri.fsPath, 'server.lock');
     this.status.name = 'Apple Intelligence API';
     this.status.command = 'appleIntelligenceApi.toggle';
-    this.status.text = '$(sync~spin) Apple: 準備中';
+    this.status.text = vscode.l10n.t('$(sync~spin) Apple: Preparing');
     this.status.show();
   }
 
@@ -106,7 +106,7 @@ class ServerController implements vscode.Disposable {
     const readString = (key: string): string => {
       const value = configuration.get<unknown>(key);
       if (typeof value !== 'string') {
-        errors.push(`${key}は文字列で指定してください。`);
+        errors.push(vscode.l10n.t('{key} must be specified as a string.', {key}));
         return '';
       }
       return value;
@@ -114,13 +114,13 @@ class ServerController implements vscode.Disposable {
     const readMap = (key: string): Record<string, string> => {
       const value = configuration.get<unknown>(key);
       if (!value || typeof value !== 'object' || Array.isArray(value)) {
-        errors.push(`${key}は言語IDと文字列のオブジェクトで指定してください。`);
+        errors.push(vscode.l10n.t('{key} must be specified as an object mapping language IDs to strings.', {key}));
         return {};
       }
       const result: Record<string, string> = {};
       for (const [language, prompt] of Object.entries(value)) {
-        if (!language.trim()) errors.push(`${key}の言語IDを空にできません。`);
-        if (typeof prompt !== 'string') errors.push(`${key}.${language}は文字列で指定してください。`);
+        if (!language.trim()) errors.push(vscode.l10n.t('Language ID for {key} must not be empty.', {key}));
+        if (typeof prompt !== 'string') errors.push(vscode.l10n.t('{key}.{language} must be specified as a string.', {key, language}));
         else result[language] = prompt;
       }
       return result;
@@ -140,25 +140,25 @@ class ServerController implements vscode.Disposable {
       validation_errors: errors,
     };
     for (const [model, prompt] of Object.entries(value.models)) {
-      const strings: Array<[string, string]> = [[`${model}の指示プロンプト`, prompt.instructions],
-        ...Object.entries(prompt.language_instructions).map<[string, string]>(([language, text]) => [`${model}/${language}の指示プロンプト`, text])];
-      for (const [label, text] of strings) if (!text.trim()) errors.push(`${label}を空にできません。`);
+      const strings: Array<[string, string]> = [[vscode.l10n.t('{model} instructions', {model}), prompt.instructions],
+        ...Object.entries(prompt.language_instructions).map<[string, string]>(([language, text]) => [vscode.l10n.t('{model}/{language} instructions', {model, language}), text])];
+      for (const [label, text] of strings) if (!text.trim()) errors.push(vscode.l10n.t('{label} must not be empty.', {label}));
       const required = model === 'apple-inline'
         ? ['{before}', '{after}']
         : ['{recentEdits}', '{beforeTarget}', '{afterTarget}', '{target}'];
-      const templates: Array<[string, string]> = [[`${model}のテンプレート`, prompt.prompt_template],
-        ...Object.entries(prompt.language_prompt_templates).map<[string, string]>(([language, text]) => [`${model}/${language}のテンプレート`, text])];
+      const templates: Array<[string, string]> = [[vscode.l10n.t('{model} template', {model}), prompt.prompt_template],
+        ...Object.entries(prompt.language_prompt_templates).map<[string, string]>(([language, text]) => [vscode.l10n.t('{model}/{language} template', {model, language}), text])];
       for (const [label, template] of templates) {
         for (const placeholder of required) {
-          if (template.split(placeholder).length !== 2) errors.push(`${label}には${placeholder}を1回だけ指定してください。`);
+          if (template.split(placeholder).length !== 2) errors.push(vscode.l10n.t('{label} must contain {placeholder} exactly once.', {label, placeholder}));
         }
       }
       if (model === 'apple-nes') {
-        const renameTemplates: Array<[string, string]> = [[`${model}のrenameテンプレート`, prompt.rename_hint_template ?? ''],
-          ...Object.entries(prompt.language_rename_hint_templates ?? {}).map<[string, string]>(([language, text]) => [`${model}/${language}のrenameテンプレート`, text])];
+        const renameTemplates: Array<[string, string]> = [[vscode.l10n.t('{model} rename template', {model}), prompt.rename_hint_template ?? ''],
+          ...Object.entries(prompt.language_rename_hint_templates ?? {}).map<[string, string]>(([language, text]) => [vscode.l10n.t('{model}/{language} rename template', {model, language}), text])];
         for (const [label, template] of renameTemplates) {
           for (const placeholder of ['{old}', '{new}']) {
-            if (template.split(placeholder).length !== 2) errors.push(`${label}には${placeholder}を1回だけ指定してください。`);
+            if (template.split(placeholder).length !== 2) errors.push(vscode.l10n.t('{label} must contain {placeholder} exactly once.', {label, placeholder}));
           }
         }
       }
@@ -181,8 +181,8 @@ class ServerController implements vscode.Disposable {
     const previous = this.promptConfigurationError;
     this.promptConfigurationError = errors.length ? errors.join(' ') : undefined;
     if (this.promptConfigurationError && this.promptConfigurationError !== previous) {
-      this.output.error(`プロンプト設定が不正です: ${this.promptConfigurationError}`);
-      if (notify) void vscode.window.showErrorMessage(`Apple Intelligence APIのプロンプト設定が不正です: ${this.promptConfigurationError}`);
+      this.output.error(vscode.l10n.t('Invalid prompt settings: {details}', {details: this.promptConfigurationError}));
+      if (notify) void vscode.window.showErrorMessage(vscode.l10n.t('Invalid Apple Intelligence API prompt settings: {details}', {details: this.promptConfigurationError}));
     }
     this.render();
   }
@@ -194,10 +194,10 @@ class ServerController implements vscode.Disposable {
         this.lastKnownPort = config.port;
         return config.port;
       }
-      throw new Error('portは1024〜65535の整数にしてください。');
+      throw new Error(vscode.l10n.t('port must be an integer between 1024 and 65535.'));
     } catch (error) {
       this.state = 'config-error';
-      this.output.error(`設定の読み込みに失敗しました: ${String(error)}`);
+      this.output.error(vscode.l10n.t('Failed to read configuration: {details}', {details: String(error)}));
       return this.lastKnownPort;
     }
   }
@@ -265,12 +265,12 @@ class ServerController implements vscode.Disposable {
       await access(binary, constants.X_OK);
     } catch (error) {
       this.state = 'config-error';
-      this.output.error(`同梱サーバーを実行できません: ${String(error)}`);
+      this.output.error(vscode.l10n.t('Cannot execute bundled server: {details}', {details: String(error)}));
       await this.releaseLock();
       return;
     }
     this.state = this.restartDelay > 1000 ? 'restarting' : 'starting';
-    this.output.info(`サーバーを開始します: ${binary}`);
+    this.output.info(vscode.l10n.t('Starting server: {path}', {path: binary}));
     const child = spawn(binary, ['--config-dir', this.configDir], {
       cwd: this.context.extensionPath,
       env: {...process.env, LOG_LEVEL: 'critical'},
@@ -282,13 +282,13 @@ class ServerController implements vscode.Disposable {
     }
     this.pipe(child.stdout, 'info');
     this.pipe(child.stderr, 'error');
-    child.once('error', error => this.output.error(`起動エラー: ${String(error)}`));
+    child.once('error', error => this.output.error(vscode.l10n.t('Startup error: {details}', {details: String(error)})));
     child.once('exit', (code, signal) => {
       if (this.child !== child) return;
       this.child = undefined;
       this.health = undefined;
       this.disconnectHealthEvents(false);
-      this.output.warn(`サーバーが終了しました: code=${String(code)} signal=${String(signal)}`);
+      this.output.warn(vscode.l10n.t('Server exited: code={code} signal={signal}', {code: String(code), signal: String(signal)}));
       if (this.wanted && !this.disposed) {
         this.state = 'restarting';
         const delay = this.restartDelay;
@@ -383,7 +383,7 @@ class ServerController implements vscode.Disposable {
         }
       }
     } catch (error) {
-      if (!controller.signal.aborted) this.output.warn(`状態通知が切断されました: ${String(error)}`);
+      if (!controller.signal.aborted) this.output.warn(vscode.l10n.t('Status notifications disconnected: {details}', {details: String(error)}));
     } finally {
       if (this.eventController === controller) this.eventController = undefined;
       if (!controller.signal.aborted) this.scheduleHealthReconnect();
@@ -429,7 +429,7 @@ class ServerController implements vscode.Disposable {
             return;
           }
         } catch {}
-        void vscode.window.showInformationMessage('サーバーは別ウインドウが管理しています。管理元で再起動してください。');
+        void vscode.window.showInformationMessage(vscode.l10n.t('The server is managed by another window. Please restart it there.'));
         return;
       }
     }
@@ -443,34 +443,34 @@ class ServerController implements vscode.Disposable {
   private render(): void {
     this.status.backgroundColor = undefined;
     if (this.promptConfigurationError) {
-      this.status.text = '$(warning) Apple: プロンプト設定エラー';
+      this.status.text = vscode.l10n.t('$(warning) Apple: Prompt configuration error');
       this.status.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
     } else if (this.state === 'conflict') {
-      this.status.text = '$(error) Apple: ポート競合';
+      this.status.text = vscode.l10n.t('$(error) Apple: Port conflict');
       this.status.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
     } else if (this.state === 'config-error') {
-      this.status.text = '$(warning) Apple: 設定エラー';
+      this.status.text = vscode.l10n.t('$(warning) Apple: Configuration error');
       this.status.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
     } else if (this.state === 'restarting') {
-      this.status.text = '$(sync~spin) Apple: 再起動中';
+      this.status.text = vscode.l10n.t('$(sync~spin) Apple: Restarting');
     } else if (this.state === 'starting') {
-      this.status.text = '$(sync~spin) Apple: 起動中';
+      this.status.text = vscode.l10n.t('$(sync~spin) Apple: Starting');
     } else if (this.state === 'disabled') {
-      this.status.text = '$(circle-slash) Apple: 無効';
+      this.status.text = vscode.l10n.t('$(circle-slash) Apple: Disabled');
     } else if (this.health?.status !== 'ok') {
-      this.status.text = '$(warning) Apple: 利用不可';
+      this.status.text = vscode.l10n.t('$(warning) Apple: Unavailable');
       this.status.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
     } else if (this.health.active) {
       const mode = this.health.activeModel === 'apple-nes' ? 'NES' : 'inline';
-      const queued = this.health.queued ? `・${this.health.queued}件待機` : '';
-      this.status.text = `$(loading~spin) Apple: ${mode} 推論中${queued}`;
+      const queued = this.health.queued ? vscode.l10n.t(' · {count} queued', {count: this.health.queued}) : '';
+      this.status.text = vscode.l10n.t('$(loading~spin) Apple: {mode} inferring{queued}', {mode, queued});
     } else {
-      this.status.text = '$(check) Apple: 待機';
+      this.status.text = vscode.l10n.t('$(check) Apple: Idle');
     }
-    const language = this.health?.activeLanguage && this.health.activeLanguage !== 'unknown' ? `\n言語: ${this.health.activeLanguage}` : '';
-    const last = this.health?.last ? `\n直近: ${this.health.last.model} / ${this.health.last.totalMilliseconds}ms / ${this.health.last.outcome}` : '';
-    const action = this.wanted ? 'クリックで無効化（サーバーを終了）' : 'クリックで有効化';
-    this.status.tooltip = `Apple Intelligence（オンデバイス）\nhttp://127.0.0.1:${this.lastKnownPort}${language}${last}\n${action}`;
+    const language = this.health?.activeLanguage && this.health.activeLanguage !== 'unknown' ? vscode.l10n.t('\nLanguage: {language}', {language: this.health.activeLanguage}) : '';
+    const last = this.health?.last ? vscode.l10n.t('\nLast: {model} / {milliseconds}ms / {outcome}', {model: this.health.last.model, milliseconds: this.health.last.totalMilliseconds, outcome: this.health.last.outcome}) : '';
+    const action = this.wanted ? vscode.l10n.t('Click to disable (stop server)') : vscode.l10n.t('Click to enable');
+    this.status.tooltip = vscode.l10n.t('Apple Intelligence (on-device)\nhttp://127.0.0.1:{port}{language}{last}\n{action}', {port: this.lastKnownPort, language, last, action});
   }
 
   async openConfig(): Promise<void> {
@@ -485,20 +485,30 @@ class ServerController implements vscode.Disposable {
   showLogs(): void { this.output.show(true); }
 
   async showStatus(): Promise<void> {
+    const state = this.health
+      ? this.health.active
+        ? vscode.l10n.t('inferring')
+        : this.health.status === 'ok'
+          ? vscode.l10n.t('idle')
+          : vscode.l10n.t('unavailable')
+      : undefined;
     const message = this.health
-      ? `Apple Intelligence: ${this.health.active ? '推論中' : this.health.status === 'ok' ? '待機' : '利用不可'} / 完了 ${this.health.completed ?? 0} / キャンセル ${this.health.cancelled ?? 0} / 失敗 ${this.health.failed ?? 0}`
-      : `Apple Intelligence API: ${this.state ?? '未接続'}`;
-    const selected = await vscode.window.showInformationMessage(message, '設定を開く', 'ログを表示');
-    if (selected === '設定を開く') await this.openConfig();
-    if (selected === 'ログを表示') this.showLogs();
+      ? vscode.l10n.t('Apple Intelligence: {state} / completed {completed} / cancelled {cancelled} / failed {failed}', {state: state ?? '', completed: this.health.completed ?? 0, cancelled: this.health.cancelled ?? 0, failed: this.health.failed ?? 0})
+      : vscode.l10n.t('Apple Intelligence API: {state}', {state: this.state ?? vscode.l10n.t('not connected')});
+    const openSettings = vscode.l10n.t('Open Settings');
+    const showLogs = vscode.l10n.t('Show Logs');
+    const selected = await vscode.window.showInformationMessage(message, openSettings, showLogs);
+    if (selected === openSettings) await this.openConfig();
+    if (selected === showLogs) this.showLogs();
   }
 
   async resetDefaults(): Promise<void> {
+    const reset = vscode.l10n.t('Reset');
     const answer = await vscode.window.showWarningMessage(
-      '編集済みの設定とプロンプトをデフォルトへ戻します。元に戻せません。',
-      {modal: true}, '初期化'
+      vscode.l10n.t('Reset edited settings and prompts to defaults. This cannot be undone.'),
+      {modal: true}, reset
     );
-    if (answer !== '初期化') return;
+    if (answer !== reset) return;
     await this.stop(false);
     await rm(this.configDir, {recursive: true, force: true});
     await this.syncMissing(this.defaultsDir, this.configDir);
