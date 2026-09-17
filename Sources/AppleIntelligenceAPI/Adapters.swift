@@ -23,35 +23,30 @@ struct PreparedRequest: Sendable {
             throw APIError("unsupported_endpoint", "inlineは/completions、NESは/chat/completionsを使用してください。")
         }
         let language = request.language ?? detectLanguage(request)
-        var instructions: String
-        let promptFile = profile.languagePromptFiles[language] ?? profile.promptFile
-        guard !promptFile.hasPrefix("/"), !promptFile.split(separator: "/").contains("..") else {
-            throw APIError("invalid_prompt", "プロンプトは設定内の相対パスで指定してください。", status: .serviceUnavailable)
+        let promptConfiguration = try PromptConfiguration.load(from: root, configuration: configuration)
+        guard let promptProfile = promptConfiguration.models[request.model] else {
+            throw APIError("invalid_prompt_configuration", "モデルのプロンプト設定がありません。", status: .serviceUnavailable)
         }
-        do { instructions = try String(contentsOf: root.appendingPathComponent(promptFile), encoding: .utf8) }
-        catch { throw APIError("invalid_prompt", "用途別プロンプトを読み込めません。", status: .serviceUnavailable) }
-        if let file = configuration.languagePromptFiles[language] {
-            guard !file.hasPrefix("/"), !file.split(separator: "/").contains("..") else {
-                throw APIError("invalid_prompt", "言語プロンプトは設定内の相対パスで指定してください。", status: .serviceUnavailable)
-            }
-            do { instructions += "\n\n" + (try String(contentsOf: root.appendingPathComponent(file), encoding: .utf8)) }
-            catch { throw APIError("invalid_prompt", "言語別プロンプトを読み込めません。", status: .serviceUnavailable) }
-        }
-        guard !instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw APIError("invalid_prompt", "用途別プロンプトが空です。", status: .serviceUnavailable)
-        }
+        let selected = promptProfile.selected(language: language)
+        let instructions = selected.instructions
         let maxTokens = min(request.maxTokens ?? profile.maxOutputTokens, profile.maxOutputTokens)
         // SDK 26には公開tokenizerがないため、コードを保守的に概算。実際の超過はAPIエラーとして返す。
         let budget = configuration.contextTokens - configuration.safetyTokens - maxTokens - estimatedTokens(instructions)
         guard budget > 128 else { throw APIError("context_length_exceeded", "用途別プロンプトが長すぎます。") }
         let result: AdapterInput
         switch profile.adapter {
-        case "fim": result = try FIMAdapter.prepare(request, budget: budget, language: language)
-        case "copilot-completions": result = try CopilotAdapter.prepare(request, budget: budget)
+        case "fim": result = try FIMAdapter.prepare(request, budget: budget, template: selected.template)
+        case "copilot-completions":
+            guard let renameHintTemplate = selected.renameHintTemplate else {
+                throw APIError("invalid_prompt_configuration", "NESのrenameテンプレートがありません。", status: .serviceUnavailable)
+            }
+            result = try CopilotAdapter.prepare(request, budget: budget, template: selected.template,
+                                                renameHintTemplate: renameHintTemplate)
         default: throw APIError("unsupported_adapter", "未対応のアダプターです。")
         }
         // 安定した識別値。プロンプト本文はログや通知へ出さない。
-        let version = instructions.utf8.reduce(UInt64(14695981039346656037)) { ($0 ^ UInt64($1)) &* 1099511628211 }
+        let versionSource = instructions + "\u{0}" + selected.template + "\u{0}" + (selected.renameHintTemplate ?? "")
+        let version = versionSource.utf8.reduce(UInt64(14695981039346656037)) { ($0 ^ UInt64($1)) &* 1099511628211 }
         return Self(model: request.model, task: profile.task, instructions: instructions,
                     prompt: result.prompt, original: result.original, maxTokens: maxTokens,
                     temperature: request.temperature ?? profile.temperature, topP: request.topP,
@@ -90,8 +85,24 @@ func clipped(_ text: String, budget: Int, tail: Bool) -> String {
     return String(String.UnicodeScalarView(tail ? scalars.reversed() : scalars))
 }
 
+func renderedTemplate(_ template: String, values: [String: String]) -> String {
+    var result = ""
+    var cursor = template.startIndex
+    while cursor < template.endIndex {
+        let next = values.compactMap { placeholder, value -> (Range<String.Index>, String)? in
+            template.range(of: placeholder, range: cursor..<template.endIndex).map { ($0, value) }
+        }.min { $0.0.lowerBound < $1.0.lowerBound }
+        guard let (range, value) = next else { break }
+        result += template[cursor..<range.lowerBound]
+        result += value
+        cursor = range.upperBound
+    }
+    result += template[cursor..<template.endIndex]
+    return result
+}
+
 enum FIMAdapter {
-    static func prepare(_ request: CompletionRequest, budget: Int, language: String) throws -> AdapterInput {
+    static func prepare(_ request: CompletionRequest, budget: Int, template: String) throws -> AdapterInput {
         guard let text = request.prompt,
               text.hasPrefix("<|fim_prefix|>"),
               let suffixTag = text.range(of: "<|fim_suffix|>"),
@@ -107,14 +118,13 @@ enum FIMAdapter {
             if suffix.hasPrefix("\n") { suffix.removeFirst() }
             if suffix.hasSuffix("\n") { suffix.removeLast() }
         }
-        let remaining = budget - 60
+        let emptyTemplate = renderedTemplate(template, values: ["{before}": "", "{after}": ""])
+        let remaining = budget - estimatedTokens(emptyTemplate)
+        guard remaining > 0 else { throw APIError("context_length_exceeded", "プロンプトテンプレートが長すぎます。") }
         let suffixBudget = min(estimatedTokens(suffix), remaining / 3)
         let before = clipped(prefix, budget: remaining - suffixBudget, tail: true)
         let after = clipped(suffix, budget: suffixBudget, tail: false)
-        if language == "markdown" {
-            return .init(prompt: "次のMarkdown文書の<CURSOR>に入る続きを補完してください。見出しや前の項目のコピーではなく、直前の文脈に自然につながる内容だけを返してください。\n<DOCUMENT>\n\(before)<CURSOR>\(after)\n</DOCUMENT>\n挿入する続き:", original: nil)
-        }
-        return .init(prompt: "<DOCUMENT>\n\(before)<CURSOR>\(after)\n</DOCUMENT>\nMissing characters:", original: nil)
+        return .init(prompt: renderedTemplate(template, values: ["{before}": before, "{after}": after]), original: nil)
     }
 }
 
@@ -130,7 +140,8 @@ enum CopilotAdapter {
         return String(text[from.upperBound..<to.lowerBound])
     }
 
-    static func prepare(_ request: CompletionRequest, budget: Int) throws -> AdapterInput {
+    static func prepare(_ request: CompletionRequest, budget: Int, template: String,
+                        renameHintTemplate: String) throws -> AdapterInput {
         guard let messages = request.messages,
               let text = messages.last(where: { $0.role == "user" })?.content.replacingOccurrences(of: "\r\n", with: "\n"),
               let window = section("code_to_edit", in: text),
@@ -139,26 +150,33 @@ enum CopilotAdapter {
         }
         let target = String(window.dropFirst(start.count + 1).dropLast(end.count + 1))
         let original = target.replacingOccurrences(of: "<|cursor|>", with: "")
-        let base = "<TARGET>\n\(target)\n</TARGET>\n"
-        var remaining = budget - estimatedTokens(base) - 100
+        let emptyTemplate = renderedTemplate(template, values: [
+            "{recentEdits}": "", "{beforeTarget}": "", "{afterTarget}": "", "{target}": ""
+        ])
+        var remaining = budget - estimatedTokens(emptyTemplate) - estimatedTokens(target)
         guard remaining >= 0 else {
             throw APIError("context_length_exceeded", "編集対象が大きすぎます。対象範囲を小さくしてください。")
         }
-        let history = clipped(section("edit_diff_history", in: text) ?? "", budget: remaining / 2, tail: true)
-        remaining -= estimatedTokens(history)
+        let rawHistory = section("edit_diff_history", in: text) ?? ""
+        let hint = renameHint(rawHistory, template: renameHintTemplate)
+        let recent = hint.isEmpty ? clipped(rawHistory, budget: remaining / 2, tail: true) : hint
+        remaining -= estimatedTokens(recent)
+        guard remaining >= 0 else {
+            throw APIError("context_length_exceeded", "renameテンプレートが長すぎます。")
+        }
         let before = clipped(section("area_code_prefix", in: text) ?? "", budget: remaining / 2, tail: true)
         remaining -= estimatedTokens(before)
         let after = clipped(section("area_code_suffix", in: text) ?? "", budget: remaining, tail: false)
-        let hint = renameHint(history)
         // 明確なrenameは意味に変換する。小型モデルが完了済みのdiffを再出力するのを避ける。
-        let recent = hint.isEmpty ? "<RECENT_EDITS>\n\(history)\n</RECENT_EDITS>" : hint
-        let prompt = "\(recent)\n<BEFORE_TARGET>\n\(before)\n</BEFORE_TARGET>\n<AFTER_TARGET>\n\(after)\n</AFTER_TARGET>\n\(base)Find the next edit in TARGET only. Every find must exist in TARGET now. Never repeat an edit that is already done."
+        let prompt = renderedTemplate(template, values: [
+            "{recentEdits}": recent, "{beforeTarget}": before, "{afterTarget}": after, "{target}": target
+        ])
         return .init(prompt: prompt, original: original)
     }
 
     // 直近の一行変更で識別子が一つだけ変わった場合、その事実を明示する。
     // 出力の置換は行わず、モデルへ渡す編集履歴を読み取りやすくする。
-    static func renameHint(_ history: String) -> String {
+    static func renameHint(_ history: String, template: String) -> String {
         let lines = history.split(separator: "\n").map(String.init)
         guard let addedIndex = lines.lastIndex(where: { $0.hasPrefix("+") && !$0.hasPrefix("+++") }),
               let old = lines[..<addedIndex].last(where: { $0.hasPrefix("-") && !$0.hasPrefix("---") }),
@@ -178,7 +196,7 @@ enum CopilotAdapter {
             while oldToken.count > 1 && newToken.count > 1 && oldToken.last == newToken.last { oldToken.removeLast(); newToken.removeLast() }
         }
         guard estimatedTokens(oldToken + newToken) < 64 else { return "" }
-        return "The last edit renamed '\(oldToken)' to '\(newToken)'. Update remaining uses of '\(oldToken)' in TARGET to '\(newToken)'."
+        return renderedTemplate(template, values: ["{old}": oldToken, "{new}": newToken])
     }
 
     static func response(_ text: String, original: String) throws -> String {

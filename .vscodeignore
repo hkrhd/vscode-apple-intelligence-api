@@ -1,6 +1,8 @@
 .artifacts/**
 .build/**
 .bun-version
+.env
+.env.*
 .github/**
 .gitignore
 .jj/**
@@ -12,6 +14,7 @@ tests/**
 node_modules/**
 Package.swift
 Package.resolved
+release.config.mjs
 tsconfig.json
 bun.lock
 AGENTS.md

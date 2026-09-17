@@ -1,13 +1,32 @@
 import * as vscode from 'vscode';
 import {ChildProcessWithoutNullStreams, spawn} from 'node:child_process';
 import {constants} from 'node:fs';
-import {access, cp, mkdir, open, readFile, readdir, rm, writeFile} from 'node:fs/promises';
+import {access, cp, mkdir, open, readFile, readdir, rename, rm, writeFile} from 'node:fs/promises';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 
 const SERVICE = 'vscode-apple-intelligence-api';
 const API_VERSION = 1;
 const DEFAULT_PORT = 8765;
+const PROMPT_SETTING_KEYS = [
+  'inline.instructions', 'inline.languageInstructions', 'inline.promptTemplate', 'inline.languagePromptTemplates',
+  'nes.instructions', 'nes.languageInstructions', 'nes.promptTemplate', 'nes.languagePromptTemplates',
+  'nes.renameHintTemplate', 'nes.languageRenameHintTemplates',
+] as const;
+
+type PromptProfile = {
+  instructions: string;
+  language_instructions: Record<string, string>;
+  prompt_template: string;
+  language_prompt_templates: Record<string, string>;
+  rename_hint_template?: string;
+  language_rename_hint_templates?: Record<string, string>;
+};
+
+type PromptSettings = {
+  models: Record<'apple-inline' | 'apple-nes', PromptProfile>;
+  validation_errors: string[];
+};
 
 type Health = {
   service?: string;
@@ -42,6 +61,8 @@ class ServerController implements vscode.Disposable {
   private eventReconnectDelay = 1000;
   private health: Health | undefined;
   private state: 'starting' | 'disabled' | 'restarting' | 'conflict' | 'config-error' | undefined;
+  private promptConfigurationError: string | undefined;
+  private promptSync: Promise<void> = Promise.resolve();
   private lastKnownPort = DEFAULT_PORT;
 
   constructor(private readonly context: vscode.ExtensionContext) {
@@ -57,6 +78,7 @@ class ServerController implements vscode.Disposable {
   async initialize(): Promise<void> {
     await mkdir(this.context.globalStorageUri.fsPath, {recursive: true});
     await this.syncMissing(this.defaultsDir, this.configDir);
+    await this.syncPromptSettings(true);
     this.wanted = vscode.workspace.getConfiguration('appleIntelligenceApi').get('enabled', true);
     if (this.wanted) {
       await this.ensureServer();
@@ -76,6 +98,93 @@ class ServerController implements vscode.Disposable {
         catch { await cp(from, to); }
       }
     }
+  }
+
+  private readPromptSettings(): {value: PromptSettings; errors: string[]} {
+    const configuration = vscode.workspace.getConfiguration('appleIntelligenceApi');
+    const errors: string[] = [];
+    const readString = (key: string): string => {
+      const value = configuration.get<unknown>(key);
+      if (typeof value !== 'string') {
+        errors.push(`${key}は文字列で指定してください。`);
+        return '';
+      }
+      return value;
+    };
+    const readMap = (key: string): Record<string, string> => {
+      const value = configuration.get<unknown>(key);
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        errors.push(`${key}は言語IDと文字列のオブジェクトで指定してください。`);
+        return {};
+      }
+      const result: Record<string, string> = {};
+      for (const [language, prompt] of Object.entries(value)) {
+        if (!language.trim()) errors.push(`${key}の言語IDを空にできません。`);
+        if (typeof prompt !== 'string') errors.push(`${key}.${language}は文字列で指定してください。`);
+        else result[language] = prompt;
+      }
+      return result;
+    };
+    const profile = (name: 'inline' | 'nes'): PromptProfile => ({
+      instructions: readString(`${name}.instructions`),
+      language_instructions: readMap(`${name}.languageInstructions`),
+      prompt_template: readString(`${name}.promptTemplate`),
+      language_prompt_templates: readMap(`${name}.languagePromptTemplates`),
+      ...(name === 'nes' ? {
+        rename_hint_template: readString('nes.renameHintTemplate'),
+        language_rename_hint_templates: readMap('nes.languageRenameHintTemplates'),
+      } : {}),
+    });
+    const value: PromptSettings = {
+      models: {'apple-inline': profile('inline'), 'apple-nes': profile('nes')},
+      validation_errors: errors,
+    };
+    for (const [model, prompt] of Object.entries(value.models)) {
+      const strings: Array<[string, string]> = [[`${model}の指示プロンプト`, prompt.instructions],
+        ...Object.entries(prompt.language_instructions).map<[string, string]>(([language, text]) => [`${model}/${language}の指示プロンプト`, text])];
+      for (const [label, text] of strings) if (!text.trim()) errors.push(`${label}を空にできません。`);
+      const required = model === 'apple-inline'
+        ? ['{before}', '{after}']
+        : ['{recentEdits}', '{beforeTarget}', '{afterTarget}', '{target}'];
+      const templates: Array<[string, string]> = [[`${model}のテンプレート`, prompt.prompt_template],
+        ...Object.entries(prompt.language_prompt_templates).map<[string, string]>(([language, text]) => [`${model}/${language}のテンプレート`, text])];
+      for (const [label, template] of templates) {
+        for (const placeholder of required) {
+          if (template.split(placeholder).length !== 2) errors.push(`${label}には${placeholder}を1回だけ指定してください。`);
+        }
+      }
+      if (model === 'apple-nes') {
+        const renameTemplates: Array<[string, string]> = [[`${model}のrenameテンプレート`, prompt.rename_hint_template ?? ''],
+          ...Object.entries(prompt.language_rename_hint_templates ?? {}).map<[string, string]>(([language, text]) => [`${model}/${language}のrenameテンプレート`, text])];
+        for (const [label, template] of renameTemplates) {
+          for (const placeholder of ['{old}', '{new}']) {
+            if (template.split(placeholder).length !== 2) errors.push(`${label}には${placeholder}を1回だけ指定してください。`);
+          }
+        }
+      }
+    }
+    return {value, errors};
+  }
+
+  syncPromptSettings(notify: boolean): Promise<void> {
+    const pending = this.promptSync.then(() => this.writePromptSettings(notify));
+    this.promptSync = pending.catch(() => undefined);
+    return pending;
+  }
+
+  private async writePromptSettings(notify: boolean): Promise<void> {
+    const {value, errors} = this.readPromptSettings();
+    const target = path.join(this.configDir, 'prompt-settings.json');
+    const temporary = path.join(this.configDir, `prompt-settings.${process.pid}.${Date.now()}.${Math.random()}.tmp`);
+    await writeFile(temporary, JSON.stringify(value, null, 2));
+    await rename(temporary, target);
+    const previous = this.promptConfigurationError;
+    this.promptConfigurationError = errors.length ? errors.join(' ') : undefined;
+    if (this.promptConfigurationError && this.promptConfigurationError !== previous) {
+      this.output.error(`プロンプト設定が不正です: ${this.promptConfigurationError}`);
+      if (notify) void vscode.window.showErrorMessage(`Apple Intelligence APIのプロンプト設定が不正です: ${this.promptConfigurationError}`);
+    }
+    this.render();
   }
 
   private async configuredPort(): Promise<number> {
@@ -333,7 +442,10 @@ class ServerController implements vscode.Disposable {
 
   private render(): void {
     this.status.backgroundColor = undefined;
-    if (this.state === 'conflict') {
+    if (this.promptConfigurationError) {
+      this.status.text = '$(warning) Apple: プロンプト設定エラー';
+      this.status.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+    } else if (this.state === 'conflict') {
       this.status.text = '$(error) Apple: ポート競合';
       this.status.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
     } else if (this.state === 'config-error') {
@@ -367,8 +479,7 @@ class ServerController implements vscode.Disposable {
   }
 
   async openPrompts(): Promise<void> {
-    await this.syncMissing(this.defaultsDir, this.configDir);
-    await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(path.join(this.configDir, 'prompts')));
+    await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:hkrhd.vscode-apple-intelligence-api prompt');
   }
 
   showLogs(): void { this.output.show(true); }
@@ -391,6 +502,9 @@ class ServerController implements vscode.Disposable {
     await this.stop(false);
     await rm(this.configDir, {recursive: true, force: true});
     await this.syncMissing(this.defaultsDir, this.configDir);
+    const configuration = vscode.workspace.getConfiguration('appleIntelligenceApi');
+    for (const key of PROMPT_SETTING_KEYS) await configuration.update(key, undefined, vscode.ConfigurationTarget.Global);
+    await this.syncPromptSettings(false);
     await this.start(false);
   }
 
@@ -423,10 +537,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('appleIntelligenceApi.showStatus', () => controller?.showStatus()),
     vscode.commands.registerCommand('appleIntelligenceApi.resetDefaults', () => controller?.resetDefaults()),
     vscode.workspace.onDidChangeConfiguration(event => {
-      if (!event.affectsConfiguration('appleIntelligenceApi.enabled')) return;
-      const enabled = vscode.workspace.getConfiguration('appleIntelligenceApi').get('enabled', true);
-      if (enabled) void controller?.start(false);
-      else void controller?.stop(false);
+      if (event.affectsConfiguration('appleIntelligenceApi.enabled')) {
+        const enabled = vscode.workspace.getConfiguration('appleIntelligenceApi').get('enabled', true);
+        if (enabled) void controller?.start(false);
+        else void controller?.stop(false);
+      }
+      if (event.affectsConfiguration('appleIntelligenceApi.inline') || event.affectsConfiguration('appleIntelligenceApi.nes')) {
+        void controller?.syncPromptSettings(true);
+      }
     }),
   );
   await controller.initialize();

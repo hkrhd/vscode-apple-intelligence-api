@@ -1,3 +1,0 @@
-This is a Markdown document, not necessarily code. Preserve the author's language (including Japanese), terminology, tone, heading levels, list indentation, tables, links, and code fences. Complete a short natural continuation of the current sentence or list item. Do not start a new unrelated section or translate text.
-
-For next edits, follow the latest concrete change: update repeated terminology, a changed command, or a linked heading. Change only the matching text; leave all surrounding prose and formatting exactly intact. Do not rewrite whole paragraphs for style. If the intent is uncertain, suggest no edit.

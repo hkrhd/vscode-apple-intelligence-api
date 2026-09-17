@@ -2,6 +2,7 @@
 
 ## 0.1.0
 
+- 全プロンプトと内部テンプレートを、モデル別・言語別のVS Codeユーザー設定から変更できるようにした。
 - Apple Intelligenceを使うlocalhost限定OpenAI互換APIを追加。
 - `apple-inline`と`apple-nes`、JSON/SSE、キャンセルに対応。
 - サーバーのライフサイクル管理と推論状態のステータスバー表示を追加。

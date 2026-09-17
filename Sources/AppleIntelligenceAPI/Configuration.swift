@@ -18,7 +18,6 @@ struct Configuration: Decodable, Sendable {
     let contextTokens: Int
     let safetyTokens: Int
     let timeoutSeconds: Int
-    let languagePromptFiles: [String: String]
     let models: [String: ModelProfile]
 
     static func load(from root: URL) throws -> Self {
@@ -35,9 +34,7 @@ struct Configuration: Decodable, Sendable {
             for profile in value.models.values {
                 guard profile.maxOutputTokens > 0,
                       profile.maxOutputTokens + value.safetyTokens < value.contextTokens,
-                      (0...2).contains(profile.temperature),
-                      !profile.promptFile.hasPrefix("/"),
-                      !profile.promptFile.split(separator: "/").contains("..") else {
+                      (0...2).contains(profile.temperature) else {
                     throw APIError("invalid_configuration", "モデル設定が不正です。", status: .serviceUnavailable)
                 }
                 guard (profile.task == .inline && profile.adapter == "fim") ||
@@ -55,10 +52,99 @@ struct ModelProfile: Decodable, Sendable {
     enum TaskKind: String, Decodable, Sendable { case inline, nes }
     let task: TaskKind
     let adapter: String
-    let promptFile: String
-    let languagePromptFiles: [String: String]
     let maxOutputTokens: Int
     let temperature: Double
+}
+
+struct PromptConfiguration: Decodable, Sendable {
+    struct Profile: Decodable, Sendable {
+        let instructions: String
+        let languageInstructions: [String: String]
+        let promptTemplate: String
+        let languagePromptTemplates: [String: String]
+        let renameHintTemplate: String?
+        let languageRenameHintTemplates: [String: String]?
+
+        func selected(language: String) -> (instructions: String, template: String, renameHintTemplate: String?) {
+            (languageInstructions[language] ?? instructions,
+             languagePromptTemplates[language] ?? promptTemplate,
+             languageRenameHintTemplates?[language] ?? renameHintTemplate)
+        }
+    }
+
+    let models: [String: Profile]
+    let validationErrors: [String]
+
+    static func load(from root: URL, configuration: Configuration) throws -> Self {
+        let value: Self
+        do {
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            value = try decoder.decode(Self.self, from: Data(contentsOf: root.appendingPathComponent("prompt-settings.json")))
+        } catch {
+            throw APIError("invalid_prompt_configuration", "VS Codeのプロンプト設定を読み込めません。", status: .serviceUnavailable)
+        }
+        guard value.validationErrors.isEmpty else {
+            throw APIError("invalid_prompt_configuration", value.validationErrors.joined(separator: " "), status: .serviceUnavailable)
+        }
+        guard Set(value.models.keys) == Set(configuration.models.keys) else {
+            throw APIError("invalid_prompt_configuration", "全モデルのプロンプト設定が必要です。", status: .serviceUnavailable)
+        }
+        for (model, modelConfiguration) in configuration.models {
+            guard let profile = value.models[model] else { continue }
+            try validate(profile.instructions, label: "\(model)の指示プロンプト")
+            for (language, instructions) in profile.languageInstructions {
+                guard !language.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw APIError("invalid_prompt_configuration", "言語IDを空にできません。", status: .serviceUnavailable)
+                }
+                try validate(instructions, label: "\(model)/\(language)の指示プロンプト")
+            }
+            try validateTemplate(profile.promptTemplate, adapter: modelConfiguration.adapter, label: "\(model)のテンプレート")
+            for (language, template) in profile.languagePromptTemplates {
+                guard !language.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw APIError("invalid_prompt_configuration", "言語IDを空にできません。", status: .serviceUnavailable)
+                }
+                try validateTemplate(template, adapter: modelConfiguration.adapter, label: "\(model)/\(language)のテンプレート")
+            }
+            if modelConfiguration.adapter == "copilot-completions" {
+                guard let renameHintTemplate = profile.renameHintTemplate else {
+                    throw APIError("invalid_prompt_configuration", "\(model)のrenameテンプレートが必要です。", status: .serviceUnavailable)
+                }
+                try validateRenameTemplate(renameHintTemplate, label: "\(model)のrenameテンプレート")
+                for (language, template) in profile.languageRenameHintTemplates ?? [:] {
+                    guard !language.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        throw APIError("invalid_prompt_configuration", "言語IDを空にできません。", status: .serviceUnavailable)
+                    }
+                    try validateRenameTemplate(template, label: "\(model)/\(language)のrenameテンプレート")
+                }
+            }
+        }
+        return value
+    }
+
+    private static func validate(_ value: String, label: String) throws {
+        guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw APIError("invalid_prompt_configuration", "\(label)を空にできません。", status: .serviceUnavailable)
+        }
+    }
+
+    private static func validateTemplate(_ template: String, adapter: String, label: String) throws {
+        let placeholders: [String]
+        switch adapter {
+        case "fim": placeholders = ["{before}", "{after}"]
+        case "copilot-completions": placeholders = ["{recentEdits}", "{beforeTarget}", "{afterTarget}", "{target}"]
+        default: return
+        }
+        for placeholder in placeholders where template.components(separatedBy: placeholder).count != 2 {
+            throw APIError("invalid_prompt_configuration", "\(label)には\(placeholder)を1回だけ指定してください。", status: .serviceUnavailable)
+        }
+    }
+
+    private static func validateRenameTemplate(_ template: String, label: String) throws {
+        for placeholder in ["{old}", "{new}"] where template.components(separatedBy: placeholder).count != 2 {
+            throw APIError("invalid_prompt_configuration", "\(label)には\(placeholder)を1回だけ指定してください。", status: .serviceUnavailable)
+        }
+    }
 }
 
 struct CompletionRequest: Decodable, Sendable {

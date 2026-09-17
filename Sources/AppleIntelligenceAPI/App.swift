@@ -138,7 +138,8 @@ struct AppleCompletion {
         let router = Router()
         router.get("/health") { _, _ in
             do {
-                _ = try Configuration.load(from: root)
+                let config = try Configuration.load(from: root)
+                _ = try PromptConfiguration.load(from: root, configuration: config)
                 let health = await server.engine.health()
                 return try jsonResponse(health, status: health.status == "ok" ? .ok : .serviceUnavailable)
             } catch { return try jsonResponse(ErrorEnvelope(apiError(error)), status: .serviceUnavailable) }

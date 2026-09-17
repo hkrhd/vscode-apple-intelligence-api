@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile, cp, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, resolve, join } from 'node:path';
 
@@ -118,9 +118,31 @@ async function contracts(): Promise<void> {
 async function hotReload(): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), 'apple-completion-e2e-'));
   const config = JSON.parse(await readFile(join(project, 'resources/defaults/config.json'), 'utf8'));
+  const manifest = JSON.parse(await readFile(join(project, 'package.json'), 'utf8'));
+  const properties = manifest.contributes.configuration.properties;
+  const promptSettings = {
+    validation_errors: [],
+    models: {
+      'apple-inline': {
+        instructions: properties['appleIntelligenceApi.inline.instructions'].default,
+        language_instructions: properties['appleIntelligenceApi.inline.languageInstructions'].default,
+        prompt_template: properties['appleIntelligenceApi.inline.promptTemplate'].default,
+        language_prompt_templates: properties['appleIntelligenceApi.inline.languagePromptTemplates'].default,
+      },
+      'apple-nes': {
+        instructions: properties['appleIntelligenceApi.nes.instructions'].default,
+        language_instructions: properties['appleIntelligenceApi.nes.languageInstructions'].default,
+        prompt_template: properties['appleIntelligenceApi.nes.promptTemplate'].default,
+        language_prompt_templates: properties['appleIntelligenceApi.nes.languagePromptTemplates'].default,
+        rename_hint_template: properties['appleIntelligenceApi.nes.renameHintTemplate'].default,
+        language_rename_hint_templates: properties['appleIntelligenceApi.nes.languageRenameHintTemplates'].default,
+      },
+    },
+  };
   config.port = 18765;
-  await cp(join(project, 'resources/defaults/prompts'), join(directory, 'prompts'), {recursive: true});
   await writeFile(join(directory, 'config.json'), JSON.stringify(config));
+  const promptPath = join(directory, 'prompt-settings.json');
+  await writeFile(promptPath, JSON.stringify(promptSettings));
   const child = Bun.spawn([join(project, '.build/release/apple-intelligence-api'), '--config-dir', directory], {stdout: 'ignore', stderr: 'pipe'});
   const url = 'http://127.0.0.1:18765';
   try {
@@ -131,21 +153,50 @@ async function hotReload(): Promise<void> {
       await Bun.sleep(100);
     }
     assert.ok(ready, '分離した検証サーバーの起動');
-    const promptPath = join(directory, 'prompts/apple-inline.md');
-    const request = {model: 'apple-inline', prompt: fim('one, two, '), max_tokens: 16};
-    await writeFile(promptPath, 'Respond with exactly APPLE_FIRST and nothing else.');
-    const first = await post(url, 'completions', request);
-    assert.match(first.data.choices?.[0]?.text ?? '', /APPLE_FIRST/);
-    await writeFile(promptPath, 'Respond with exactly APPLE_SECOND and nothing else.');
-    const second = await post(url, 'completions', request);
-    assert.match(second.data.choices?.[0]?.text ?? '', /APPLE_SECOND/);
-    const stopped = await post(url, 'completions', {...request, stop: '_SECOND'});
-    assert.equal(stopped.data.choices[0].text, 'APPLE');
+    const invalidRequest = {model: 'apple-inline', prompt: 'invalid', max_tokens: 16};
+    const initial = await post(url, 'completions', invalidRequest);
+    assert.equal(initial.status, 400);
+    assert.equal(initial.data.error.code, 'invalid_fim_prompt');
+    promptSettings.models['apple-inline'].instructions = 'x'.repeat(10_000);
+    await writeFile(promptPath, JSON.stringify(promptSettings));
+    const largeInstructions = await post(url, 'completions', invalidRequest);
+    assert.equal(largeInstructions.data.error.code, 'context_length_exceeded');
+    promptSettings.models['apple-inline'].instructions = properties['appleIntelligenceApi.inline.instructions'].default;
+    promptSettings.models['apple-inline'].language_instructions.test = 'x'.repeat(10_000);
+    await writeFile(promptPath, JSON.stringify(promptSettings));
+    const language = await post(url, 'completions', {...invalidRequest, language: 'test'});
+    assert.equal(language.data.error.code, 'context_length_exceeded');
+    promptSettings.models['apple-inline'].language_instructions.test = properties['appleIntelligenceApi.inline.instructions'].default;
+    promptSettings.models['apple-inline'].prompt_template = `${'x'.repeat(10_000)}{before}{after}`;
+    await writeFile(promptPath, JSON.stringify(promptSettings));
+    const largeTemplate = await post(url, 'completions', {model: 'apple-inline', prompt: fim('one, two, '), max_tokens: 16});
+    assert.equal(largeTemplate.data.error.code, 'context_length_exceeded');
+    promptSettings.models['apple-inline'].prompt_template = properties['appleIntelligenceApi.inline.promptTemplate'].default;
+    promptSettings.models['apple-inline'].language_prompt_templates.test = `${'x'.repeat(10_000)}{before}{after}`;
+    await writeFile(promptPath, JSON.stringify(promptSettings));
+    const languageTemplate = await post(url, 'completions', {model: 'apple-inline', language: 'test', prompt: fim('one, two, '), max_tokens: 16});
+    assert.equal(languageTemplate.data.error.code, 'context_length_exceeded');
+    delete promptSettings.models['apple-inline'].language_prompt_templates.test;
+    promptSettings.models['apple-inline'].prompt_template = '{before}';
+    await writeFile(promptPath, JSON.stringify(promptSettings));
+    const invalidPrompt = await post(url, 'completions', invalidRequest);
+    assert.equal(invalidPrompt.status, 503);
+    assert.equal(invalidPrompt.data.error.code, 'invalid_prompt_configuration');
+    assert.equal((await fetch(url + '/health')).status, 503);
+    promptSettings.models['apple-inline'].prompt_template = properties['appleIntelligenceApi.inline.promptTemplate'].default;
+    await writeFile(promptPath, JSON.stringify(promptSettings));
+    assert.equal((await fetch(url + '/health')).status, 200);
+    promptSettings.models['apple-nes'].rename_hint_template = '{old}';
+    await writeFile(promptPath, JSON.stringify(promptSettings));
+    assert.equal((await fetch(url + '/health')).status, 503);
+    promptSettings.models['apple-nes'].rename_hint_template = properties['appleIntelligenceApi.nes.renameHintTemplate'].default;
+    await writeFile(promptPath, JSON.stringify(promptSettings));
+    assert.equal((await fetch(url + '/health')).status, 200);
     await writeFile(join(directory, 'config.json'), '{');
     assert.equal((await fetch(url + '/health')).status, 503);
     await writeFile(join(directory, 'config.json'), JSON.stringify(config));
     assert.equal((await fetch(url + '/health')).status, 200);
-    records.push({case: 'prompt-hot-reload-stop-and-config-recovery', passed: true});
+    records.push({case: 'settings-prompt-hot-reload-language-validation-and-config-recovery', passed: true});
   } finally {
     child.kill();
     await child.exited;
@@ -154,16 +205,18 @@ async function hotReload(): Promise<void> {
 }
 
 try {
-  let ready = false;
-  for (let attempt = 0; attempt < 50; attempt++) {
-    try { ready = (await fetch(base + '/health')).ok; } catch {}
-    if (ready) break;
-    await Bun.sleep(100);
+  if (!process.argv.includes('--hot-reload-only')) {
+    let ready = false;
+    for (let attempt = 0; attempt < 50; attempt++) {
+      try { ready = (await fetch(base + '/health')).ok; } catch {}
+      if (ready) break;
+      await Bun.sleep(100);
+    }
+    assert.ok(ready, '補完サーバーの起動');
+    await evaluate();
+    await contracts();
   }
-  assert.ok(ready, '補完サーバーの起動');
-  await evaluate();
-  await contracts();
-  if (process.argv.includes('--hot-reload')) await hotReload();
+  if (process.argv.includes('--hot-reload') || process.argv.includes('--hot-reload-only')) await hotReload();
 } catch (error) {
   records.push({case: 'contract-failure', passed: false, error: String(error)});
   console.error(error);
